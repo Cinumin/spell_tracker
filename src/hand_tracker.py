@@ -1,6 +1,7 @@
 import time
 
 import cv2 as cv
+from collections import deque
 import mediapipe as mp
 import numpy as np
 
@@ -102,6 +103,38 @@ def is_pen_down(result: HandLandmarkerResult) -> bool:
         and angle_pinky < BENT_ANGLE_THRESHOLD_DEG
     )
 
+# Pixel positions of the index fingertip recorded while the pen is "down",
+# in the order they were traced.
+stroke_path = deque()
+
+
+def get_index_fingertip_position(result: HandLandmarkerResult, frame_width: int, frame_height: int):
+    """Return the index fingertip's pixel coordinates on the frame.
+
+    Uses the normalized image-space landmarks (not the 3D world landmarks
+    used for angle calculations) so the point lines up with where the
+    finger appears in the rendered frame, matching the convention used by
+    draw_landmarks_on_frame() in utils.py.
+
+    Returns:
+        An (x, y) pixel-coordinate tuple, or None if no hand was detected.
+    """
+    if not result.hand_landmarks:
+        return None
+    tip = result.hand_landmarks[0][INDEX_FINGER_JOINTS[2]]
+    return int(tip.x * frame_width), int(tip.y * frame_height)
+
+
+def add_to_buffer(point) -> None:
+    """Append a fingertip position to the in-progress stroke path."""
+    stroke_path.append(point)
+
+
+def clear_stroke(key: int) -> None:
+    """Clear the stroke path if the 'c' key was pressed this frame."""
+    if key == ord("c"):
+        stroke_path.clear()
+
 
 def main() -> None:
     """Run the live webcam capture and hand-tracking loop until 'q' is pressed."""
@@ -137,11 +170,18 @@ def main() -> None:
                     draw_landmarks_on_frame(frame, latest_result) if latest_result else frame
                 )
 
-                if latest_result and is_pen_down(latest_result):
+                pen_down = latest_result and is_pen_down(latest_result)
+                if pen_down:
                     print("Pen down.")
+                    frame_height, frame_width = frame.shape[:2]
+                    fingertip = get_index_fingertip_position(latest_result, frame_width, frame_height)
+                    if fingertip:
+                        add_to_buffer(fingertip)
 
                 cv.imshow("frame", annotated_frame)
-                if cv.waitKey(1) == ord("q"):
+                key = cv.waitKey(1)
+                clear_stroke(key)
+                if key == ord("q"):
                     break
         finally:
             cap.release()
