@@ -103,6 +103,36 @@ def is_pen_down(result: HandLandmarkerResult) -> bool:
         and angle_pinky < BENT_ANGLE_THRESHOLD_DEG
     )
 
+def is_pinch(result: HandLandmarkerResult) -> bool:
+    """Determine whether the tracked hand is making a "pinch" gesture.
+
+    The gesture is recognized when the index finger and thumb are close together,
+    while the other fingers are curled (bent).
+
+    Args:
+        result: The latest hand-landmarker detection result.
+
+    Returns:
+        True if the pinch gesture is detected, False otherwise.
+    """
+    if not result.hand_landmarks:
+        return False
+
+    # Get the positions of the index fingertip and thumb tip
+    index_tip = result.hand_landmarks[0][INDEX_FINGER_JOINTS[2]]
+    thumb_tip = result.hand_landmarks[0][4]  # Thumb tip landmark index is 4
+
+    index_dip = result.hand_landmarks[0][7]  # Index finger DIP joint
+    thumb_ip = result.hand_landmarks[0][3]  # Thumb IP joint
+   
+    distanceThumbTipIndexTip = np.sqrt((index_tip.x - thumb_tip.x) ** 2 + (index_tip.y - thumb_tip.y) ** 2)
+    distanceThumbTipThumbIp = np.sqrt((thumb_tip.x - thumb_ip.x) ** 2 + (thumb_tip.y - thumb_ip.y) ** 2)
+    distanceIndexTipIndexDip = np.sqrt((index_tip.x - index_dip.x) ** 2 + (index_tip.y - index_dip.y) ** 2) 
+
+    relativeDistance = (distanceThumbTipIndexTip * 10) / (0.5 *(distanceThumbTipThumbIp + distanceIndexTipIndexDip))
+
+    return relativeDistance < 1.0  # Adjust the threshold as needed
+
 # Pixel positions of the index fingertip recorded while the pen is "down",
 # in the order they were traced.
 stroke_path = deque()
