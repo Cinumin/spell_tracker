@@ -7,6 +7,18 @@ import numpy as np
 
 from utils import draw_landmarks_on_frame
 
+from OneEuroFilter import OneEuroFilter
+
+config = {
+    'freq': 120,       # Hz
+    'mincutoff': 1.0,  # Hz
+    'beta': 0.1,       
+    'dcutoff': 1.0    
+    }
+
+fx = OneEuroFilter(**config)
+fy = OneEuroFilter(**config)
+
 BaseOptions = mp.tasks.BaseOptions
 HandLandmarker = mp.tasks.vision.HandLandmarker
 HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
@@ -71,9 +83,9 @@ def save_result(result: HandLandmarkerResult, output_image: mp.Image, timestamp_
     This is passed as the `result_callback` for the live-stream
     HandLandmarker and is invoked automatically once detection completes.
     """
-    global latest_result
+    global latest_result, latest_timestamp_ms
     latest_result = result
-
+    latest_timestamp_ms = timestamp_ms
 
 def is_pen_down(result: HandLandmarkerResult) -> bool:
     """Determine whether the tracked hand is making a "pen down" gesture.
@@ -130,15 +142,15 @@ def is_pinch(result: HandLandmarkerResult) -> bool:
     distanceIndexTipIndexDip = np.sqrt((index_tip.x - index_dip.x) ** 2 + (index_tip.y - index_dip.y) ** 2) 
 
     relativeDistance = (distanceThumbTipIndexTip * 10) / (0.5 *(distanceThumbTipThumbIp + distanceIndexTipIndexDip))
-
-    return relativeDistance < 1.0  # Adjust the threshold as needed
+   
+    return relativeDistance < 6.0  # Adjust the threshold as needed
 
 # Pixel positions of the index fingertip recorded while the pen is "down",
 # in the order they were traced.
 stroke_path = deque()
 
 
-def get_index_fingertip_position(result: HandLandmarkerResult, frame_width: int, frame_height: int):
+def get_pinch_position(result: HandLandmarkerResult, frame_width: int, frame_height: int):
     """Return the index fingertip's pixel coordinates on the frame.
 
     Uses the normalized image-space landmarks (not the 3D world landmarks
@@ -151,8 +163,11 @@ def get_index_fingertip_position(result: HandLandmarkerResult, frame_width: int,
     """
     if not result.hand_landmarks:
         return None
-    tip = result.hand_landmarks[0][INDEX_FINGER_JOINTS[2]]
-    return int(tip.x * frame_width), int(tip.y * frame_height)
+    index_tip = result.hand_landmarks[0][INDEX_FINGER_JOINTS[2]]
+    thumb_tip = result.hand_landmarks[0][4]
+    mid_x = (index_tip.x + thumb_tip.x) / 2
+    mid_y = (index_tip.y + thumb_tip.y) / 2
+    return int(mid_x * frame_width), int(mid_y * frame_height)
 
 
 def add_to_buffer(point) -> None:
@@ -200,13 +215,19 @@ def main() -> None:
                     draw_landmarks_on_frame(frame, latest_result) if latest_result else frame
                 )
 
+                if latest_result:
+                    is_pinch(latest_result)
+
                 pen_down = latest_result and is_pen_down(latest_result)
                 if pen_down:
                     print("Pen down.")
                     frame_height, frame_width = frame.shape[:2]
-                    fingertip = get_index_fingertip_position(latest_result, frame_width, frame_height)
-                    if fingertip:
-                        add_to_buffer(fingertip)
+                    pinch_position = get_pinch_position(latest_result, frame_width, frame_height)
+                    if pinch_position:
+                        x, y = pinch_position
+                        timestamp_s = latest_timestamp_ms / 1000.0
+                        filtered = (fx(x, timestamp_s), fy(y, timestamp_s))
+                        add_to_buffer(filtered)
 
                 cv.imshow("frame", annotated_frame)
                 key = cv.waitKey(1)
