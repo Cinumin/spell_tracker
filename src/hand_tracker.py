@@ -35,6 +35,12 @@ PINKY_FINGER_JOINTS = (17, 18, 20)
 # A finger is considered "bent" below this angle, and "straight" above it.
 BENT_ANGLE_THRESHOLD_DEG = 100
 
+# How long the pinch gesture must be continuously absent before a stroke is
+# considered finished. Absorbs brief single-frame detection dropouts (e.g.
+# from motion blur during fast hand movement) so they don't fragment an
+# otherwise continuous stroke.
+PEN_UP_GRACE_SECONDS = 0.15
+
 # Holds the most recent detection result produced by the async landmarker
 # callback, so the main loop can read it without blocking on detection.
 latest_result = None
@@ -145,9 +151,13 @@ def is_pinch(result: HandLandmarkerResult) -> bool:
    
     return relativeDistance < 6.0  # Adjust the threshold as needed
 
-# Pixel positions of the index fingertip recorded while the pen is "down",
-# in the order they were traced.
-stroke_path = deque()
+# Completed strokes, each a deque of (x, y) pixel positions traced while the
+# pen was "down" during one pen-down -> pen-up cycle.
+strokes = []
+
+# Pixel positions of the index fingertip recorded during the in-progress
+# stroke (empty when the pen is up).
+current_stroke = deque()
 
 
 def get_pinch_position(result: HandLandmarkerResult, frame_width: int, frame_height: int):
@@ -171,15 +181,43 @@ def get_pinch_position(result: HandLandmarkerResult, frame_width: int, frame_hei
 
 
 def add_to_buffer(point) -> None:
-    """Append a fingertip position to the in-progress stroke path."""
-    stroke_path.append(point)
+    """Append a fingertip position to the in-progress stroke."""
+    current_stroke.append(point)
+
+
+def end_stroke() -> None:
+    """Complete the in-progress stroke, moving it into the strokes list.
+
+    Called on a pen-down -> pen-up transition so each pinch-drag becomes its
+    own entry rather than merging into one continuous trail.
+    """
+    global current_stroke
+    if current_stroke:
+        strokes.append(current_stroke)
+        current_stroke = deque()
 
 
 def clear_stroke(key: int) -> None:
-    """Clear the stroke path if the 'c' key was pressed this frame."""
+    """Clear all strokes if the 'c' key was pressed this frame."""
+    global current_stroke
     if key == ord("c"):
-        stroke_path.clear()
+        strokes.clear()
+        current_stroke = deque()
 
+def draw_stroke(canvas: np.ndarray) -> None:
+    """Draw all completed strokes plus the in-progress stroke on the canvas.
+
+    Each stroke is drawn independently so no line is drawn connecting the
+    end of one stroke to the start of the next.
+    """
+    for stroke in strokes + [current_stroke]:
+        prev = None
+        for x, y in stroke:
+            point = (int(x), int(y))
+            cv.circle(canvas, point, radius=2, color=(0, 0, 0), thickness=-1)
+            if prev is not None:
+                cv.line(canvas, prev, point, color=(0, 0, 0), thickness=3)
+            prev = point
 
 def main() -> None:
     """Run the live webcam capture and hand-tracking loop until 'q' is pressed."""
@@ -196,6 +234,7 @@ def main() -> None:
             print("Error: Could not open webcam.")
             return
 
+        last_pen_down_time = 0.0
         try:
             while True:
                 ret, frame = cap.read()
@@ -215,12 +254,9 @@ def main() -> None:
                     draw_landmarks_on_frame(frame, latest_result) if latest_result else frame
                 )
 
-                if latest_result:
-                    is_pinch(latest_result)
-
-                pen_down = latest_result and is_pen_down(latest_result)
+                pen_down = latest_result and is_pinch(latest_result)
                 if pen_down:
-                    print("Pen down.")
+                    last_pen_down_time = time.time()
                     frame_height, frame_width = frame.shape[:2]
                     pinch_position = get_pinch_position(latest_result, frame_width, frame_height)
                     if pinch_position:
@@ -228,6 +264,10 @@ def main() -> None:
                         timestamp_s = latest_timestamp_ms / 1000.0
                         filtered = (fx(x, timestamp_s), fy(y, timestamp_s))
                         add_to_buffer(filtered)
+                elif time.time() - last_pen_down_time > PEN_UP_GRACE_SECONDS:
+                    end_stroke()
+
+                draw_stroke(annotated_frame)
 
                 cv.imshow("frame", annotated_frame)
                 key = cv.waitKey(1)
