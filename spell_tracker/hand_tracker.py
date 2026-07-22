@@ -13,8 +13,8 @@ from OneEuroFilter import OneEuroFilter
 
 DEFAULT_FILTER_CONFIG = {
     'freq': 120,       # Hz
-    'mincutoff': 1.0,  # Hz
-    'beta': 0.1,
+    'mincutoff': 0.3,  # Hz -- lower = more smoothing of jitter while holding still
+    'beta': 0.4,       # higher = less lag when the fingertip moves quickly
     'dcutoff': 1.0,
 }
 
@@ -146,9 +146,9 @@ class StrokeTracker:
             prev = None
             for x, y in stroke:
                 point = (int(x), int(y))
-                cv.circle(canvas, point, radius=2, color=(0, 0, 0), thickness=-1)
+                cv.circle(canvas, point, radius=4, color=(0, 0, 0), thickness=-1, lineType=cv.LINE_AA)
                 if prev is not None:
-                    cv.line(canvas, prev, point, color=(0, 0, 0), thickness=3)
+                    cv.line(canvas, prev, point, color=(0, 0, 0), thickness=6, lineType=cv.LINE_AA)
                 prev = point
 
     def update(self, frame_width: int, frame_height: int) -> None:
