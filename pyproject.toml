@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spell-tracker"
+version = "0.1.0"
+description = "Hand-gesture Chinese-character stroke tracing via MediaPipe hand tracking."
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python",
+    "mediapipe",
+    "numpy",
+    "scipy",
+    "OneEuroFilter",
+]
+
+[project.scripts]
+spell-tracker = "spell_tracker.hand_tracker:main"
+
+[tool.setuptools]
+packages = ["spell_tracker"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]

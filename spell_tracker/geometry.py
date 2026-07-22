@@ -113,9 +113,3 @@ def compare_to_reference(user_strokes, reference_medians):
     row_indices, col_indices = linear_sum_assignment(cost_matrix)
     per_stroke_distances = cost_matrix[row_indices, col_indices]
     return sum(per_stroke_distances), per_stroke_distances
-
-
-if __name__ == "__main__":
-    medians = load_reference('火', path='huo.json')
-    for stroke in normalize_strokes(medians):
-        print(stroke)
