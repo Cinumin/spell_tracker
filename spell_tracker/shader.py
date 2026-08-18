@@ -1,27 +1,6 @@
 import moderngl_window as mglw
 
-class ShaderWindow(mglw.WindowConfig):
-    gl_version = (3, 3)
-    title = "GLSL Raymarching"
-    window_size = (800, 600)
-    resizable = True
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        # Full-screen quad geometry
-        self.quad = mglw.geometry.quad_fs()
-
-        # Compile Shader
-        self.program = self.ctx.program(
-            vertex_shader="""
-                #version 330
-                in vec2 in_position;
-                void main() {
-                    gl_Position = vec4(in_position, 0.0, 1.0);
-                }
-            """,
-            fragment_shader="""
+FIREBALL_FRAGMENT_SHADER = """
                 #version 330
                 uniform vec3 iResolution;
                 uniform float iTime;
@@ -185,6 +164,30 @@ class ShaderWindow(mglw.WindowConfig):
                     mainImage(fragColor, gl_FragCoord.xy);
                 }
             """
+
+
+class ShaderWindow(mglw.WindowConfig):
+    gl_version = (3, 3)
+    title = "GLSL Raymarching"
+    window_size = (800, 600)
+    resizable = True
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # Full-screen quad geometry
+        self.quad = mglw.geometry.quad_fs()
+
+        # Compile Shader
+        self.program = self.ctx.program(
+            vertex_shader="""
+                #version 330
+                in vec2 in_position;
+                void main() {
+                    gl_Position = vec4(in_position, 0.0, 1.0);
+                }
+            """,
+            fragment_shader=FIREBALL_FRAGMENT_SHADER,
         )
 
     def on_render(self, time: float, frametime: float):

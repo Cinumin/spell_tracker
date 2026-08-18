@@ -12,9 +12,10 @@ from . import geometry
 from OneEuroFilter import OneEuroFilter
 
 import struct
+import moderngl
 import moderngl_window as mglw
 
-from .shader import ShaderWindow
+from .shader import FIREBALL_FRAGMENT_SHADER
 
 DEFAULT_FILTER_CONFIG = {
     'freq': 120,       # Hz
@@ -267,73 +268,6 @@ class StrokeTracker:
         return geometry.identify_character(user_strokes, candidates)
 
 
-def main() -> None:
-    """Run the live webcam capture and hand-tracking loop until 'q' is pressed."""
-    candidates = geometry.load_references(CANDIDATE_CHARACTERS, path=str(DATA_DIR / "characters.json"))
-    tracker = StrokeTracker()
-
-    options = HandLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=str(MODEL_PATH)),
-        running_mode=VisionRunningMode.LIVE_STREAM,
-        # Lowered from the 0.5 default: fewer "no landmarks this frame"
-        # drops on motion-blurred frames during fast hand movement, and
-        # keeps MediaPipe's lightweight frame-to-frame tracker engaged
-        # instead of falling back to full re-detection.
-        min_hand_presence_confidence=0.3,
-        min_tracking_confidence=0.3,
-        result_callback=tracker.on_result,
-    )
-
-    with HandLandmarker.create_from_options(options) as landmarker:
-        # Start capturing from the webcam.
-        cap = cv.VideoCapture(0, cv.CAP_AVFOUNDATION)
-        if not cap.isOpened():
-            print("Error: Could not open webcam.")
-            return
-
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    print("Error: Empty camera frame.")
-                    break
-
-                # MediaPipe expects an RGB image wrapped in its own Image type.
-                rgb_frame = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-
-                # Detection runs asynchronously; tracker.on_result() stores
-                # the result once it completes.
-                landmarker.detect_async(mp_image, int(time.time() * 1000))
-                annotated_frame = (
-                    draw_landmarks_on_frame(frame, tracker.latest_result)
-                    if tracker.latest_result else frame
-                )
-
-                frame_height, frame_width = frame.shape[:2]
-                tracker.update(frame_width, frame_height)
-                tracker.draw(annotated_frame)
-
-                cv.imshow("frame", annotated_frame)
-                key = cv.waitKey(1)
-                if key == ord("c"):
-                    tracker.clear()
-                elif key == ord("r"):
-                    ranked = tracker.identify(candidates)
-                    if not ranked:
-                        stroke_count = len(tracker.strokes)
-                        print(f"no candidate has {stroke_count} strokes -- can't identify yet")
-                    else:
-                        best_character, best_distance = ranked[0]
-                        print(f"looks like {best_character} (distance={best_distance:.3f}); ranking={ranked}")
-                        if best_character == "火":
-                            ShaderWindow.run_shader()
-                if key == ord("q"):
-                    break
-        finally:
-            cap.release()
-            cv.destroyAllWindows()
-
 class Test(mglw.WindowConfig):
     gl_version = (3, 3)
     def __init__(self, **kwargs):
@@ -356,7 +290,11 @@ class Test(mglw.WindowConfig):
             print("Error: Could not open webcam.")
             return
         ret, frame = self.cap.read()
-                
+        while not ret:
+            # AVFoundation capture devices commonly return no frame on the
+            # first read or two while the device is still warming up.
+            ret, frame = self.cap.read()
+
         self.texture = self.ctx.texture(
                     size=(frame.shape[1], frame.shape[0]),
                     components=3,
@@ -400,29 +338,25 @@ class Test(mglw.WindowConfig):
     )
         self.vao = self.ctx.vertex_array(render_program, [(vbo, '2f 2f', 'in_vert', 'in_uv')])
 
-    #FIX ME: Write the fragment shader for the fireball effect.
-    #shader_program = self.ctx.program(
-    #    vertex_shader='''
-    #        #version 330
-    #        in vec2 in_vert;
-    #        in vec2 in_uv;
-    #        out vec2 uv;
-    #        void main() {
-    #            gl_Position = vec4(in_vert, 0.0, 1.0);
-    #            uv = in_uv;
-    #        }
-    #    ''',
-    #    fragment_shader='''
-    #        #version 330
-    #        uniform float u_time;
-    #        uniform floatu_intesity;
-    #        uniform u_position;
-    #        void main() {
-    #            fragColor = texture(tex, uv);
-    #        }
-    #    ''',
-    #)
-    
+        # Fireball overlay pass: rendered additively on top of the webcam
+        # quad once "火" is recognized. Reuses the same full-screen-quad VBO;
+        # the fragment shader keys off gl_FragCoord and never reads in_uv.
+        fireball_program = self.ctx.program(
+            vertex_shader='''
+                #version 330
+                in vec2 in_vert;
+                in vec2 in_uv;
+                out vec2 uv;
+                void main() {
+                    gl_Position = vec4(in_vert, 0.0, 1.0);
+                    uv = in_uv;
+                }
+            ''',
+            fragment_shader=FIREBALL_FRAGMENT_SHADER,
+        )
+        self.fire_program = fireball_program
+        self.fire_vao = self.ctx.vertex_array(fireball_program, [(vbo, '2f 2f', 'in_vert', 'in_uv')])
+        self.show_fire = False
 
     def on_render(self, t: float, frametime: float):
         self.ctx.clear(1.0, 0.0, 0.0, 0.0)
@@ -450,10 +384,27 @@ class Test(mglw.WindowConfig):
         self.texture.use()
         self.vao.render()
 
+        if self.show_fire:
+            # Additive blend: the shader's background() is black, so this
+            # only brightens pixels where the flame itself is drawn.
+            self.ctx.enable(moderngl.BLEND)
+            self.ctx.blend_func = (moderngl.ONE, moderngl.ONE)
+            if "iResolution" in self.fire_program:
+                self.fire_program["iResolution"].value = (
+                    float(self.wnd.size[0]),
+                    float(self.wnd.size[1]),
+                    1.0,
+                )
+            if "iTime" in self.fire_program:
+                self.fire_program["iTime"].value = t
+            self.fire_vao.render()
+            self.ctx.disable(moderngl.BLEND)
+
     def on_key_event(self, key, action, modifiers):
         if action == self.wnd.keys.ACTION_PRESS:
             if key == self.wnd.keys.C:
                 self.tracker.clear()
+                self.show_fire = False
             elif key == self.wnd.keys.R:
                 ranked = self.tracker.identify(self.candidates)
                 if not ranked:
@@ -463,7 +414,7 @@ class Test(mglw.WindowConfig):
                     best_character, best_distance = ranked[0]
                     print(f"looks like {best_character} (distance={best_distance:.3f}); ranking={ranked}")
                     if best_character == "火":
-                        ShaderWindow.run_shader()
+                        self.show_fire = True
 
     def on_close(self):
         self.cap.release()
